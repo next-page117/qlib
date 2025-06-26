@@ -1,0 +1,79 @@
+# 你是一名精通python的程序员，你需要按照以下功能完成需求。
+# 需求描述
+- 解析scripts/dump_bin.py文件，该文件是将指定的csv文件的股票数据转换成qlib格式的数据。
+- 现在数据存放在clickhouse中，用户名：nero,数据库名：tushare，密码：ck7981，你需要把dump_bin.py中的数据读取部分改为从clickhouse中读取数据。
+- 需要读取的数据包括以下字段，下面描述的字段在不同的table中，你需要统一获取。
+    - tushare.daily
+        - ts_code
+        - trade_date
+        - open
+        - high
+        - low
+        - close
+        - change
+        - pct_chg
+        - vol
+        - amount
+    - tushare.adj_factor
+        - ts_code
+        - trade_date
+        - adj_factor
+    - tushare.daily_basic
+        - ts_code
+        - trade_date
+        - turnover_rate
+        - turnover_rate_f
+        - volume_ratio
+        - pe
+        - pe_ttm
+        - pb
+        - ps
+        - ps_ttm
+        - dv_ratio
+        - dv_ttm
+        - total_share
+        - float_share
+        - free_share
+        - total_mv
+        - circ_mv
+        - limit_status
+    - tushare.moneyflow
+        - ts_code
+        - trade_date
+        - buy_sm_vol
+        - buy_sm_amount
+        - sell_sm_vol
+        - sell_sm_amount
+        - buy_md_vol
+        - buy_md_amount
+        - sell_md_vol
+        - sell_md_amount
+        - buy_lg_vol
+        - buy_lg_amount
+        - sell_lg_vol
+        - sell_lg_amount
+        - buy_elg_vol
+        - buy_elg_amount
+        - sell_elg_vol
+        - sell_elg_amount
+        - net_mf_vol
+        - net_mf_amount
+        - trade_count
+- 针对上述clickhouse中的字段，你需要严格按照scripts/dump_bin.py文件的最后生成文件格式转换，只是读取csv文件变为从clickhouse中读取数据。
+- 数据获取开始时间为2010-02-01,结束时间为2025-06-20。
+- 上面有些字段（open、high、low、close、change、pct_chg）需要改为后复权价格，复权因子为字段adj_factor，后复权计算方式为：
+    - 后复权价格 = 当前价格 * adj_factor
+- 最后转换的qlib数据存放在/home/nero/.qlib/qlib_data/tushare_data中。
+- dump前有些字段需要进行重新命名：
+    adj_factor -> factor
+- 后复权值计算和factor命名都在sql中完成，不要在python代码中进行。
+- 最终的数据字段不需要包含ts_code，但是code_list为ts_code，且格式需改为类似sz000001的格式，比如原来ts_code为000001.SZ，则code_list中为sz000001。
+# 约束
+- 生成的文件放在scripts/dump_bin_fromDB.py中，不得修改或新增其它文件
+- 生成必要且简洁的注释，注释不要写入到文件中。
+- 代码需要简洁，无需多余的判断和空行。
+- 在文件的main函数中，添加简单的测试代码
+
+# 要求
+当前为最新的需求，你需要根据现有代码查找出未实现功能，然后针对性的修改
+改动尽可能少，不影响之前的需求，列出新增需求和更改项。
