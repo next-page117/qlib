@@ -10,6 +10,7 @@ from qlib.utils import fname_to_code, code_to_fname
 import clickhouse_connect
 from typing import List, Set
 from tqdm import tqdm
+import shutil
 
 class DumpDataFromClickHouse:
     """从ClickHouse数据库导出数据到qlib格式"""
@@ -73,6 +74,17 @@ class DumpDataFromClickHouse:
         query = f"""
         SELECT DISTINCT ts_code 
         FROM daily 
+        WHERE trade_date >= '{self.start_date}' AND trade_date <= '{self.end_date}'
+        ORDER BY ts_code
+        """
+        result = self.client.query(query)
+        return [row[0] for row in result.result_rows]
+    
+    def get_index_list(self) -> List[str]:
+        """获取指数代码列表"""
+        query = f"""
+        SELECT DISTINCT ts_code 
+        FROM index_daily 
         WHERE trade_date >= '{self.start_date}' AND trade_date <= '{self.end_date}'
         ORDER BY ts_code
         """
@@ -166,7 +178,48 @@ class DumpDataFromClickHouse:
         
         df = pd.DataFrame(result.result_rows, columns=columns)
         if not df.empty:
+            # 先转换日期类型
             df['trade_date'] = pd.to_datetime(df['trade_date'])
+            # 去重：保留最后一条记录（通常最新的数据更准确）
+            df = df.drop_duplicates(subset=['ts_code', 'trade_date'], keep='last')
+            df.set_index('trade_date', inplace=True)
+            df = df.drop(columns=['ts_code'])
+        return df
+    
+    def get_index_data(self, ts_code: str, client=None) -> pd.DataFrame:
+        """获取单只指数的所有数据"""
+        if client is None:
+            client = self.client
+        
+        query = f"""
+        SELECT 
+            ts_code,
+            trade_date,
+            open,
+            high,
+            low,
+            close,
+            pre_close,
+            change,
+            pct_chg,
+            vol as volume,
+            amount
+        FROM index_daily
+        WHERE ts_code = '{ts_code}' 
+        AND trade_date >= '{self.start_date}' 
+        AND trade_date <= '{self.end_date}'
+        ORDER BY trade_date
+        """
+        
+        result = client.query(query)
+        columns = ['ts_code', 'trade_date', 'open', 'high', 'low', 'close', 'pre_close', 'change', 'pct_chg', 'volume', 'amount']
+        
+        df = pd.DataFrame(result.result_rows, columns=columns)
+        if not df.empty:
+            # 先转换日期类型
+            df['trade_date'] = pd.to_datetime(df['trade_date'])
+            # 去重：保留最后一条记录（通常最新的数据更准确）
+            df = df.drop_duplicates(subset=['ts_code', 'trade_date'], keep='last')
             df.set_index('trade_date', inplace=True)
             df = df.drop(columns=['ts_code'])
         return df
@@ -253,14 +306,71 @@ class DumpDataFromClickHouse:
             logger.error(f"Error processing {ts_code}: {e}")
             return None, None, None
     
+    def _dump_single_index(self, ts_code: str, calendar_list: List[pd.Timestamp]) -> tuple:
+        """处理单只指数数据"""
+        try:
+            client = clickhouse_connect.get_client(**self._client_params)
+            df = self.get_index_data(ts_code, client)
+            if df.empty:
+                logger.warning(f"{ts_code} data is empty")
+                return None, None, None
+            features_dir_name = self.tscode_to_feature_dirname(ts_code)
+            features_dir = self._features_dir.joinpath(features_dir_name)
+            features_dir.mkdir(parents=True, exist_ok=True)
+            
+            self._data_to_bin(df, calendar_list, features_dir, ts_code)
+            
+            start_date = self._format_datetime(df.index.min())
+            end_date = self._format_datetime(df.index.max())
+            
+            return features_dir_name.upper(), start_date, end_date
+        except Exception as e:
+            logger.error(f"Error processing {ts_code}: {e}")
+            return None, None, None
+    
+    def _clear_existing_data(self):
+        """清理已存在的数据文件"""
+        logger.info("清理已存在的数据文件...")
+        try:
+            # 删除 features 目录下的所有文件夹
+            if self._features_dir.exists():
+                for item in self._features_dir.iterdir():
+                    if item.is_dir():
+                        shutil.rmtree(item)
+            
+            # 删除 calendars 目录下的文件
+            if self._calendars_dir.exists():
+                for item in self._calendars_dir.iterdir():
+                    if item.is_file():
+                        item.unlink()
+            
+            # 删除 instruments 目录下的文件
+            if self._instruments_dir.exists():
+                for item in self._instruments_dir.iterdir():
+                    if item.is_file():
+                        item.unlink()
+            
+            logger.info("清理目录完成")
+        except Exception as e:
+            logger.error(f"清理数据时出错: {e}")
+            raise
+    
     def dump(self):
         """主导出函数"""
         logger.info("开始从ClickHouse导出数据...")
+        
+        # 清理已存在的数据
+        self._clear_existing_data()
         
         # 获取股票列表
         logger.info("获取股票列表...")
         stock_list = self.get_stock_list()
         logger.info(f"共找到 {len(stock_list)} 只股票")
+        
+        # 获取指数列表
+        logger.info("获取指数列表...")
+        index_list = self.get_index_list()
+        logger.info(f"共找到 {len(index_list)} 只指数")
         
         # 获取交易日历
         logger.info("获取交易日历...")
@@ -277,7 +387,21 @@ class DumpDataFromClickHouse:
             futures = {executor.submit(self._dump_single_stock, ts_code, calendar_list): ts_code 
                       for ts_code in stock_list}
             
-            with tqdm(total=len(futures), desc="导出进度") as pbar:
+            with tqdm(total=len(futures), desc="股票导出进度") as pbar:
+                for future in as_completed(futures):
+                    code, start_date, end_date = future.result()
+                    if code:
+                        instruments_data.append(f"{code}{self.INSTRUMENTS_SEP}{start_date}{self.INSTRUMENTS_SEP}{end_date}")
+                    pbar.update(1)
+        
+        # 导出指数数据
+        logger.info("开始导出指数数据...")
+        
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            futures = {executor.submit(self._dump_single_index, ts_code, calendar_list): ts_code 
+                      for ts_code in index_list}
+            
+            with tqdm(total=len(futures), desc="指数导出进度") as pbar:
                 for future in as_completed(futures):
                     code, start_date, end_date = future.result()
                     if code:
@@ -286,7 +410,7 @@ class DumpDataFromClickHouse:
         
         # 保存股票列表
         self.save_instruments(instruments_data)
-        logger.info(f"数据导出完成，共处理 {len(instruments_data)} 只股票")
+        logger.info(f"数据导出完成，共处理 {len(instruments_data)} 只股票和指数")
 
 def main():
     """测试函数"""
@@ -300,8 +424,13 @@ def main():
         if len(stock_list) > 0:
             logger.info(f"前5只股票: {stock_list[:5]}")
         
-        if len(stock_list) == 0:
-            logger.warning("未找到股票数据，请检查数据库表是否存在数据")
+        index_list = dumper.get_index_list()
+        logger.info(f"共找到 {len(index_list)} 只指数")
+        if len(index_list) > 0:
+            logger.info(f"前5只指数: {index_list[:5]}")
+        
+        if len(stock_list) == 0 and len(index_list) == 0:
+            logger.warning("未找到股票和指数数据，请检查数据库表是否存在数据")
             return
             
         # 完整导出
