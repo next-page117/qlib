@@ -203,7 +203,8 @@ class DumpDataFromClickHouse:
             change,
             pct_chg,
             vol as volume,
-            amount
+            amount,
+            1 as factor
         FROM index_daily
         WHERE ts_code = '{ts_code}' 
         AND trade_date >= '{self.start_date}' 
@@ -212,7 +213,7 @@ class DumpDataFromClickHouse:
         """
         
         result = client.query(query)
-        columns = ['ts_code', 'trade_date', 'open', 'high', 'low', 'close', 'pre_close', 'change', 'pct_chg', 'volume', 'amount']
+        columns = ['ts_code', 'trade_date', 'open', 'high', 'low', 'close', 'pre_close', 'change', 'pct_chg', 'volume', 'amount', 'factor']
         
         df = pd.DataFrame(result.result_rows, columns=columns)
         if not df.empty:
