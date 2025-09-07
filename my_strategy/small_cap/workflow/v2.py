@@ -15,7 +15,6 @@ sys.path.append(str(current_dir))
 
 # 导入自定义类
 from dataset.alpha158_5day import Alpha158_5Day
-from strategy.top5_5day_strategy import Top5_5DayStrategy
 
 # %% 内存清理
 vars_to_drop = ["model","dataset","pred_df","report_normal_df","positions","analysis_df","pred_label"]
@@ -111,8 +110,10 @@ print("预测结果示例：")
 print(pred_df.head())
 
 # %% 回测 - 使用自定义策略
+from strategy.top5_5day_strategy import Top5_5DayStrategy
 from qlib.backtest.executor import SimulatorExecutor
 from qlib.backtest import backtest
+from qlib.contrib.evaluate import risk_analysis
 
 # 使用自定义策略
 strategy = Top5_5DayStrategy(
@@ -147,17 +148,31 @@ portfolio_metric_dict, indicator_dict = backtest(
 
 # 取出 1day 频率的报告与持仓
 report_normal_df, positions = portfolio_metric_dict["1day"]
-analysis_df, indicator_obj = indicator_dict["1day"]
+excess_no_cost = report_normal_df["return"] - report_normal_df["bench"]
+excess_with_cost = report_normal_df["return"] - report_normal_df["bench"] - report_normal_df["cost"]
 
-print("回测收益概览：")
-print(report_normal_df.head())
-print("指标：", analysis_df)
+freq = "1day"  # 与生成文件名一致
+ana_no_cost = risk_analysis(excess_no_cost, freq=freq)
+ana_with_cost = risk_analysis(excess_with_cost, freq=freq)
+
+analysis_df = pd.concat(
+    {
+        "excess_return_without_cost": ana_no_cost,
+        "excess_return_with_cost": ana_with_cost,
+    }
+)
+print("回测分析结果：")
+print(analysis_df)
 
 # %% 绘图
+from qlib.contrib.report.analysis_position.parse_position import parse_position
 from qlib.contrib.report import analysis_position, analysis_model
 
 # 收益图
 analysis_position.report_graph(report_normal_df)
+
+# 风险分析
+analysis_position.risk_analysis_graph(analysis_df, report_normal_df)
 
 # IC（需要对齐 index）
 pred_only = pred.to_frame("score")
