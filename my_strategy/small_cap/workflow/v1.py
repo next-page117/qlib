@@ -143,6 +143,12 @@ analysis_position.report_graph(report_normal_df)
 # %%
 analysis_position.risk_analysis_graph(analysis_df, report_normal_df)
 
+# %% 持仓分析，会报错
+# pred_df_dates = pred_df.index.get_level_values(level='datetime')
+# features_df = D.features(D.instruments(market), ['Ref($close, -1)/$close-1'], pred_df_dates.min(), pred_df_dates.max())
+# features_df.columns = ['label']
+# analysis_position.rank_label_graph(positions, features_df, pred_df_dates.min(), pred_df_dates.max())
+
 # %%
 label_df = dataset.prepare("test", col_set="label")
 label_df.columns = ["label"]
