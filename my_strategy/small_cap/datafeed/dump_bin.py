@@ -86,24 +86,44 @@ class JuKuanDataDumper(DumpDataBase):
         return calendars_list
 
     def _dump_instruments(self):
-        """生成股票列表文件（优化版：避免重复过滤）"""
+        """生成股票列表文件（生成all.txt和指数成分股文件）"""
         print("生成股票列表...")
-        instruments_data = []
         
-        # 使用 groupby 一次性获取每个股票的日期范围，避免重复过滤
+        # 使用 groupby 一次性获取每个股票的日期范围
         symbol_date_ranges = (
             self.df.groupby(self.symbol_field_name)[self.date_field_name]
             .agg(['min', 'max'])
             .reset_index()
         )
         
+        all_instruments = []
+        stock_instruments = []
+        
         for _, row in symbol_date_ranges.iterrows():
             symbol = row[self.symbol_field_name]
             start_str = self._format_datetime(row['min'])
             end_str = self._format_datetime(row['max'])
-            instruments_data.append(f"{symbol.upper()}\t{start_str}\t{end_str}")
+            instrument_line = f"{symbol.upper()}\t{start_str}\t{end_str}"
+            
+            # 所有数据都加入all.txt
+            all_instruments.append(instrument_line)
+            
+            # 只有非指数代码才加入指数成分股文件
+            index_code = self.INSTRUMENTS_FILE_NAME.replace('.txt', '')
+            if not symbol.startswith(index_code + '.'):
+                stock_instruments.append(instrument_line)
         
-        self.save_instruments(instruments_data)
+        # 先保存指数成分股文件（使用原有方法）
+        self.save_instruments(stock_instruments)
+        
+        # 手动保存all.txt
+        all_path = self._instruments_dir / "all.txt"
+        self._instruments_dir.mkdir(parents=True, exist_ok=True)
+        with open(all_path, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(all_instruments))
+        
+        print(f"生成all.txt: {len(all_instruments)}个标的")
+        print(f"生成{self.INSTRUMENTS_FILE_NAME}: {len(stock_instruments)}个成分股")
 
     def _dump_features(self):
         """生成特征数据（优化版：减少重复分组）"""

@@ -249,16 +249,6 @@ if not is_resume and os.path.exists(DATA_FILE):
     os.remove(DATA_FILE)
     print(f"已删除现有文件: {DATA_FILE}")
 
-# 新增：因子筛选流程
-# print("\n=== 开始因子筛选 ===")
-# print("过滤开始日期的高NaN比例因子...")
-# stockList = get_stock(STOCK_POOL, START_DATE)
-# jqfactors_list = filter_factors_by_nan_ratio(
-#         stockList, jqfactors_list, START_DATE, NAN_THRESHOLD
-#     )
-# print(f"最终使用因子数量: {len(jqfactors_list)}")
-# print("=== 因子筛选完成 ===\n")
-
 # 遍历每个交易日
 for i, date in enumerate(tqdm(trade_dates, desc="处理交易日")):
     try:
@@ -330,3 +320,49 @@ for i, date in enumerate(tqdm(trade_dates, desc="处理交易日")):
 print(f"\n数据获取完成！")
 print(f"总共处理了 {total_processed} 条记录")
 print(f"数据已保存到: {DATA_FILE}")
+
+# %% 获取指数自身量价数据
+INDEX_CODE = '399101.XSHE'  # 中小板指数代码
+
+print(f"\n开始获取指数 {INDEX_CODE} 自身量价数据...")
+
+try:
+    # 获取指数价格数据
+    index_price_data = get_price(
+        INDEX_CODE,
+        start_date=START_DATE,
+        end_date=END_DATE,
+        frequency='daily',
+        fields=['open', 'close', 'low', 'high', 'volume'],
+        panel=False
+    )
+    
+    if not index_price_data.empty:
+        # 格式化指数数据
+        index_data = []
+        for date_idx, row in index_price_data.iterrows():
+            index_row = {
+                'date': date_idx.strftime('%Y-%m-%d'),
+                'code': INDEX_CODE,
+                'open': row['open'],
+                'close': row['close'],
+                'low': row['low'],
+                'high': row['high'],
+                'volume': row['volume'],
+                'market_cap': np.nan,  # 使用NaN保持数据类型一致
+                'circulating_market_cap': np.nan
+            }
+            index_data.append(index_row)
+        
+        # 转换为DataFrame并保存
+        index_df = pd.DataFrame(index_data)
+        save_to_hdf5([index_df], DATA_FILE, mode='a')
+        
+        print(f"指数 {INDEX_CODE} 数据获取完成，共 {len(index_df)} 条记录")
+    else:
+        print(f"指数 {INDEX_CODE} 数据为空")
+
+except Exception as e:
+    print(f"获取指数数据时出错: {e}")
+
+print(f"\n所有数据获取完成！数据文件: {DATA_FILE}")
