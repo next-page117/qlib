@@ -29,7 +29,6 @@ qlib.init(provider_uri=provider_uri, region=REG_CN)
 
 # %%
 market = "399101" # 中小综指
-benchmark = "399101.xshe"
 
 # %% 模型训练
 data_handler_config = {
@@ -109,15 +108,25 @@ pred_df = pd.concat([test_y.rename(columns={test_y.columns[0]: "label"}), pred],
 print("预测结果示例：")
 print(pred_df.head())
 
+# 保存预测结果到cache
+cache_dir = current_dir / "cache"
+cache_dir.mkdir(exist_ok=True)
+pred_cache_path = cache_dir / "pred_results.pkl"
+pred.to_pickle(pred_cache_path)
+print(f"预测结果已保存到: {pred_cache_path}")
+
 # %% 回测 - 使用自定义策略
 from strategy.top5_5day_strategy import Top5_5DayStrategy
 from qlib.backtest.executor import SimulatorExecutor
 from qlib.backtest import backtest
 from qlib.contrib.evaluate import risk_analysis
 
-# 使用自定义策略
+# 从cache读取预测结果
+pred_cached = pd.read_pickle(pred_cache_path)
+
+# 使用缓存的预测结果
 strategy = Top5_5DayStrategy(
-    signal=pred.to_frame("score") if hasattr(pred, 'to_frame') else pred,
+    signal=pred_cached.to_frame("score") if hasattr(pred_cached, 'to_frame') else pred_cached,
     topk=5,           # 选择5只股票
     trade_period=5,   # 5天调仓一次
 )
@@ -126,6 +135,7 @@ executor = SimulatorExecutor(
     generate_portfolio_metrics=True,
 )
 
+benchmark = "399101.xshe"
 backtest_start = "2023-01-01"
 backtest_end   = "2025-09-04"   # 注意不要用最后一个交易日 (需要下一日价格计算收益)
 
@@ -175,7 +185,7 @@ analysis_position.report_graph(report_normal_df)
 analysis_position.risk_analysis_graph(analysis_df, report_normal_df)
 
 # IC（需要对齐 index）
-pred_only = pred.to_frame("score")
+pred_only = pred_cached.to_frame("score")
 test_label_df = test_y.rename(columns={test_y.columns[0]: "label"})
 pred_label = pd.concat([test_label_df, pred_only], axis=1).reindex(test_label_df.index)
 analysis_position.score_ic_graph(pred_label)
