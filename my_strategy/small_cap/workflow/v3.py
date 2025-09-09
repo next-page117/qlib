@@ -115,6 +115,17 @@ pred_cache_path = cache_dir / "pred_results.pkl"
 pred.to_pickle(pred_cache_path)
 print(f"预测结果已保存到: {pred_cache_path}")
 
+# 保存结果为csv文件
+pred_csv_df = (
+    pred.rename("score")
+        .reset_index()  # MultiIndex -> 普通列
+        .rename(columns={"datetime": "date", "instrument": "code"})
+)
+csv_path = cache_dir / "pred_results.csv"
+pred_csv_df.to_csv(csv_path, index=False, encoding="utf-8-sig", float_format="%.6f")
+print(f"预测结果CSV已保存: {csv_path}  行数={len(pred_csv_df)}  样例：")
+print(pred_csv_df.head())
+
 # %% 模型性能分析
 import sys
 from pathlib import Path
