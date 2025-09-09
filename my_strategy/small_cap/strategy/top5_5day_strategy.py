@@ -101,10 +101,10 @@ class Top5_5DayStrategy(BaseSignalStrategy):
         
         # 步骤2：获取这些股票的流通市值
         stocks = filtered_stocks.index.tolist()
-        features_df = get_features(stocks, ["$circulating_market_cap"], pred_end_time, pred_end_time)
+        features_df = get_features(stocks, ["$circulating_market_cap"], pred_start_time, pred_start_time)
         
         # 从重置索引后的DataFrame中提取数据
-        market_cap_data = features_df[features_df['datetime'] == pred_end_time]
+        market_cap_data = features_df[features_df['datetime'] == pred_start_time]
         market_cap_series = market_cap_data.set_index('instrument')["$circulating_market_cap"].dropna()
 
         # 按流通市值升序排列，选最小的topk
