@@ -4,11 +4,23 @@ from qlib.contrib.strategy.signal_strategy import BaseSignalStrategy
 from qlib.strategy.base import BaseStrategy
 from qlib.backtest.decision import Order, OrderDir, TradeDecisionWO
 from qlib.backtest.position import Position
+from qlib.data import D
 import sys
 from pathlib import Path
 current_dir = Path(__file__).parent.parent
 sys.path.insert(0, str(current_dir))
 from log.backtest_logger import setup_backtest_logger
+
+def get_features(instruments, fields, start_time, end_time):
+    """获取股票特征数据，返回包含股票代码、时间、查询字段的DataFrame"""
+    features_df = D.features(instruments, fields, start_time, end_time).reset_index()
+    for field in fields:
+        if field in features_df.columns:
+            # 彻底的类型转换：先转数值，再去除无效值，最后确保为float
+            features_df[field] = pd.to_numeric(features_df[field], errors='coerce')
+            features_df[field] = features_df[field].replace([np.inf, -np.inf], np.nan)
+            features_df[field] = features_df[field].astype('float64')
+    return features_df
 
 class Top5_5DayStrategy(BaseSignalStrategy):
     """
@@ -42,6 +54,68 @@ class Top5_5DayStrategy(BaseSignalStrategy):
         )
         self.logger.info(f"策略初始化: topk={topk}, trade_period={trade_period}")
         
+    def _log_current_holdings(self, trade_step, current_position, pred_score):
+        """打印当前持仓信息"""
+        current_stocks = current_position.get_stock_list()
+        if not current_stocks:
+            self.logger.info(f"Step {trade_step}: 当前无持仓")
+            return
+            
+        self.logger.info(f"Step {trade_step}: 当前持仓详情:")
+        for stock in current_stocks:
+            amount = current_position.get_stock_amount(stock)
+            price = current_position.get_stock_price(stock)
+            value = amount * price
+            score = pred_score[stock] if stock in pred_score.index else None
+            self.logger.info(f"  {stock}: 数量={amount}, 价格={round(price, 2)}, 价值={round(value, 2)}, 预测得分={round(score, 4) if score is not None else 'N/A'}")
+        
+    def _select_target_stocks(self, pred_start_time, pred_end_time, trade_step):
+        """
+        选股函数：
+        1. 筛选预测得分>0的股票
+        2. 从中选择流通市值最小的topk只股票
+        
+        Returns
+        -------
+        list
+            目标股票列表
+        """
+        # 获取预测信号
+        pred_score = self.signal.get_signal(start_time=pred_start_time, end_time=pred_end_time)
+        
+        # 处理多列信号的情况
+        if isinstance(pred_score, pd.DataFrame):
+            pred_score = pred_score.iloc[:, 0]
+        
+        if pred_score is None or pred_score.empty:
+            self.logger.warning(f"Step {trade_step}: 无有效预测信号")
+            return []
+        
+        # 步骤1：筛选预测得分>0的股票
+        pred_score = pred_score.dropna()
+        filtered_stocks = pred_score[pred_score > 0]
+        
+        if filtered_stocks.empty:
+            self.logger.warning(f"Step {trade_step}: 无预测得分>0的股票")
+            return []
+        
+        # 步骤2：获取这些股票的流通市值
+        stocks = filtered_stocks.index.tolist()
+        features_df = get_features(stocks, ["$circulating_market_cap"], pred_end_time, pred_end_time)
+        
+        # 从重置索引后的DataFrame中提取数据
+        market_cap_data = features_df[features_df['datetime'] == pred_end_time]
+        market_cap_series = market_cap_data.set_index('instrument')["$circulating_market_cap"].dropna()
+
+        # 按流通市值升序排列，选最小的topk
+        target_stocks = market_cap_series.nsmallest(self.topk).index.tolist()
+        
+        # 记录选股结果
+        top5_scores = [(stock, round(pred_score[stock], 4), round(market_cap_series[stock], 2)) for stock in target_stocks]
+        self.logger.info(f"Step {trade_step}: TOP{self.topk}选股: {top5_scores}")
+        
+        return target_stocks
+        
     def generate_trade_decision(self, execute_result=None):
         """生成交易决策"""
         # 获取当前交易步数和时间
@@ -57,46 +131,26 @@ class Top5_5DayStrategy(BaseSignalStrategy):
             
         # 获取信号 - 使用前一期的信号预测当前期
         pred_start_time, pred_end_time = self.trade_calendar.get_step_time(trade_step, shift=1)
-        pred_score = self.signal.get_signal(start_time=pred_start_time, end_time=pred_end_time)
         
-        # 处理多列信号的情况
+        # 使用选股函数获取目标股票
+        target_stocks = self._select_target_stocks(pred_start_time, pred_end_time, trade_step)
+        
+        if not target_stocks:
+            self.logger.warning(f"Step {trade_step}: 无目标股票")
+            return TradeDecisionWO([], self)
+        
+        # 获取预测分数用于后续记录
+        pred_score = self.signal.get_signal(start_time=pred_start_time, end_time=pred_end_time)
         if isinstance(pred_score, pd.DataFrame):
             pred_score = pred_score.iloc[:, 0]
-            
-        if pred_score is None or pred_score.empty:
-            self.logger.warning(f"Step {trade_step}: 无有效预测信号")
-            return TradeDecisionWO([], self)
-            
-        # 按分数排序，选择前topk只股票
-        pred_score = pred_score.dropna().sort_values(ascending=False)
-        target_stocks = pred_score.head(self.topk).index.tolist()
-        
-        # 记录预测得分前5名
-        top5_scores = [(stock, round(pred_score[stock], 4)) for stock in target_stocks]
-        self.logger.info(f"Step {trade_step}: TOP{self.topk}预测得分: {top5_scores}")
+        pred_score = pred_score.dropna()
         
         # 获取当前持仓
         current_position = self.trade_position
         current_stocks = set(current_position.get_stock_list())
         
         # 记录当前持仓及其预测得分
-        if current_stocks:
-            holdings_info = []
-            for stock in current_stocks:
-                amount = current_position.get_stock_amount(stock)
-                price = current_position.get_stock_price(stock)
-                value = amount * price
-                score = pred_score[stock] if stock in pred_score.index else None
-                holdings_info.append({
-                    'stock': stock,
-                    'amount': amount,
-                    'price': round(price, 2),
-                    'value': round(value, 2),
-                    'pred_score': round(score, 4) if score is not None else None
-                })
-            self.logger.info(f"Step {trade_step}: 当前持仓: {holdings_info}")
-        else:
-            self.logger.info(f"Step {trade_step}: 当前无持仓")
+        self._log_current_holdings(trade_step, current_position, pred_score)
         
         target_stocks_set = set(target_stocks)
         

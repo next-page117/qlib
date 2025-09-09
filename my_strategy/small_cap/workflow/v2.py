@@ -116,14 +116,25 @@ pred.to_pickle(pred_cache_path)
 print(f"预测结果已保存到: {pred_cache_path}")
 
 # %% 回测 - 使用自定义策略
+import sys
+from pathlib import Path
+current_dir = Path(__file__).parent.parent if hasattr(Path(__file__), 'parent') else Path.cwd().parent
+sys.path.insert(0, str(current_dir))
 from strategy.top5_5day_strategy import Top5_5DayStrategy
 from qlib.backtest.executor import SimulatorExecutor
 from qlib.backtest import backtest
 from qlib.contrib.evaluate import risk_analysis
+from qlib.config import C
+import qlib
+from qlib.constant import REG_CN
+import pandas as pd
 
+qlib.init(
+            provider_uri="~/.qlib/qlib_data/jukuan_data",
+            region=REG_CN,
+        )
 # 从cache读取预测结果
-pred_cached = pd.read_pickle(pred_cache_path)
-
+pred_cached = pd.read_pickle("../cache/pred_results.pkl")
 # 使用缓存的预测结果
 strategy = Top5_5DayStrategy(
     signal=pred_cached.to_frame("score") if hasattr(pred_cached, 'to_frame') else pred_cached,
@@ -174,13 +185,13 @@ analysis_df = pd.concat(
 print("回测分析结果：")
 print(analysis_df)
 
-# %% 绘图
 from qlib.contrib.report.analysis_position.parse_position import parse_position
 from qlib.contrib.report import analysis_position, analysis_model
 
 # 收益图
 analysis_position.report_graph(report_normal_df)
 
+# %% 绘图
 # 风险分析
 analysis_position.risk_analysis_graph(analysis_df, report_normal_df)
 
